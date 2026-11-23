@@ -61,6 +61,11 @@ class Stages:
     codesign: bool = False
     # chained missions: {first stage of a later mission: (its start state, unscaled; its start controls)}
     junctions: dict = field(default_factory=dict)
+    # a start pinned by constraints: these states (by name) left free at stage 0, which ``start_events`` (events judged
+    # on the start state) hold; ``start`` is then only their first guess (the Earth-Mars example's departure: a free
+    # launch date, the position Earth's on it, the speed within the launch vehicle's)
+    start_free: tuple[str, ...] = ()
+    start_events: tuple = ()
     info: dict = field(default_factory=dict)
     node_second_order: ClassVar[bool] = False
 
@@ -75,7 +80,11 @@ class Stages:
         self.design_var_ref = np.where(np.abs(p0) > 1.0, np.abs(p0), 1.0)  # (design variables over their start, at least 1)
         self._il = slice(self.ns + self.nc, self.ns + self.nc + self.nl)
         self.nx, self.nu = self.ns + self.nc + self.nl + 1, self.nc + 1 + 3 * self.ns
-        self.free = np.arange(self.ns + self.nc, self.nx)  # (the design variables when co-designing; the leg time)
+        free_states = [self.si[n] for n in self.start_free]
+        if len(free_states) != len(set(free_states)) or self.si['cost'] in free_states:
+            raise ValueError('start_free: each state once, never the cost')
+        # (the design variables when co-designing, the leg time, and the start states left free)
+        self.free = np.concatenate([np.asarray(free_states, int), np.arange(self.ns + self.nc, self.nx)])
         # (each leg's stage count: its own, or the problem's; a short or fast-changing leg can be refined alone)
         # (each leg's stages: its mesh (fractions of its time), or its own count, or the problem's, uniform)
         meshes = [
@@ -93,7 +102,7 @@ class Stages:
         self.nh = 3 * self.ns
         self._c, self._D = (jnp.asarray(a) for a in radau_iia3())
         self._p = jnp.asarray(m.params())
-        self.kinds = list(dict.fromkeys(type(ev) for leg in self.legs for ev in (*leg.end, *leg.along)))
+        self.kinds = list(dict.fromkeys([*(type(ev) for leg in self.legs for ev in (*leg.end, *leg.along)), *map(type, self.start_events)]))
         self._make_data()
         dyn, defects, ineq = self._dynamics(), self._defects(), self._ineq()
         self._compile(dyn, defects, ineq)
@@ -140,6 +149,8 @@ class Stages:
             for ev in leg.along:
                 for k in range(L0[p] + 1, L0[p + 1] + 1):
                     self._write(ends, k, ev)
+        for ev in self.start_events:  # (judged at stage 0, on the start state)
+            self._write(ends, 0, ev)
         ends[N, self._ie] = self.frac[-1]
         self.masks, self.ends = masks, ends
 

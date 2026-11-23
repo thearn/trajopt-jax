@@ -6,8 +6,15 @@ Trajectory optimisation written entirely in JAX, built to run on a GPU.
 pip install git+https://github.com/thearn/trajopt-jax
 ```
 
-Example: [`examples/brachistochrone.py`](examples/brachistochrone.py), and as a notebook
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/thearn/trajopt-jax/blob/main/examples/brachistochrone.ipynb)
+Examples, each with a notebook that states the problem's equations:
+
+| Example | What it shows | Notebook |
+|---|---|---|
+| [`brachistochrone.py`](examples/brachistochrone.py) | a model, one leg to a point, mesh refinement; against the exact cycloid | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/thearn/trajopt-jax/blob/main/examples/brachistochrone.ipynb) |
+| [`rendezvous.py`](examples/rendezvous.py) | a low-thrust planet-to-planet rendezvous with the departure date solved for (a start pinned by constraints), least propellant by homotopy; against the Hohmann transfer | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/thearn/trajopt-jax/blob/main/examples/rendezvous.ipynb) |
+
+`pip install "trajopt-jax[examples] @ git+https://github.com/thearn/trajopt-jax"` adds what the notebooks plot with;
+`[gpu]` the CUDA build of JAX.
 
 ## Key features
 
