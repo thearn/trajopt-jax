@@ -26,7 +26,7 @@ from typing import Any, ClassVar, Protocol
 import numpy as np
 
 from trajopt_jax._jax import Array, jax, jnp
-from trajopt_jax.events import Leg
+from trajopt_jax.events import T_LEG_MIN, Leg
 from trajopt_jax.radau import radau_iia3
 from trajopt_jax.specs import ControlSpec, PathConstraint, StateSpec
 
@@ -129,7 +129,11 @@ class Stages:
             masks[k, 2 : 3 + self.ns + self.nc] = block
             ends[k, 4 : 5 + self.ns + self.nc] = block
         for p, leg in enumerate(self.legs):
-            ends[L0[p] : L0[p + 1] + 1, 1:3] = (leg.min_s, leg.max_s)
+            # (the leg time's bounds at its first stage only, loose elsewhere: the time is one state held through the
+            # leg, and a hold's min_s = max_s repeated at every stage made hundreds of dependent active rows, which
+            # stalled the wing's recon at feasibility 0.1 on every mesh, 2026-11-23)
+            ends[L0[p] : L0[p + 1] + 1, 1:3] = (T_LEG_MIN, 1e6)
+            ends[L0[p], 1:3] = (leg.min_s, leg.max_s)
             ends[L0[p] : L0[p + 1], self._ie] = self.frac[L0[p] : L0[p + 1]]
             for ev in leg.end:
                 self._write(ends, L0[p + 1], ev)
