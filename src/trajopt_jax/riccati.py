@@ -221,6 +221,22 @@ def restore(X: Array, W: Array, L: Array, maps: tuple, Q: Array, q: Array, B: Ar
     return U, nu
 
 
+def _residuals(lqr: LQR, x0: Array, free: Any, sol: tuple) -> tuple:
+    """The LQR's KKT residuals at ``sol``: stationarity in x and u, the terminal's, the dynamics, the start."""
+    Q, QN, q, qN, A, B, e = lqr
+    X, U, L, lam0 = sol
+    nx = A.shape[1]
+    fixed = np.setdiff1d(np.arange(nx), np.atleast_1d(free))
+    rd = X[1:] - jnp.einsum('kij,kj->ki', A, X[:-1]) - jnp.einsum('kij,kj->ki', B, U) - e
+    g = jnp.einsum('kij,kj->ki', Q, jnp.concatenate([X[:-1], U], 1)) + q
+    rx = g[:, :nx].at[1:].add(L[:-1]) - jnp.einsum('kji,kj->ki', A, L)
+    rx = rx.at[0, fixed].add(lam0[fixed])
+    ru = g[:, nx:] - jnp.einsum('kji,kj->ki', B, L)
+    rN = QN @ X[-1] + qN + L[-1]
+    d0 = jnp.zeros(nx, X.dtype).at[fixed].set((X[0] - x0)[fixed])
+    return rx, ru, rN, rd, d0
+
+
 def refined(solver: Any, rounds: int = 1) -> Any:
     """``solver`` (riccati_parallel or riccati_scan) with ``rounds`` of iterative refinement: the LQR's KKT residuals
     (dynamics, stationarity, the start) as the right-hand side of the same LQR, the correction added. The parallel
@@ -228,29 +244,45 @@ def refined(solver: Any, rounds: int = 1) -> Any:
     at 11,000, against ~1e-14 for the sequential recursion; refined once, 5e-10 and 1.4e-9 (2026-11-17)."""
 
     def solve(lqr: LQR, x0: Array, free: Any) -> tuple:
-        Q, QN, q, qN, A, B, e = lqr
-        nx = A.shape[1]
-        fixed = np.setdiff1d(np.arange(nx), np.atleast_1d(free))
-
         def round_(_: int, sol: tuple) -> tuple:
             X, U, L, lam0 = sol
-            rd = X[1:] - jnp.einsum('kij,kj->ki', A, X[:-1]) - jnp.einsum('kij,kj->ki', B, U) - e
-            g = jnp.einsum('kij,kj->ki', Q, jnp.concatenate([X[:-1], U], 1)) + q
-            rx = g[:, :nx].at[1:].add(L[:-1]) - jnp.einsum('kji,kj->ki', A, L)
-            rx = rx.at[0, fixed].add(lam0[fixed])
-            ru = g[:, nx:] - jnp.einsum('kji,kj->ki', B, L)
-            rN = QN @ X[-1] + qN + L[-1]
-            d0 = jnp.zeros(nx, X.dtype).at[fixed].set((X[0] - x0)[fixed])
+            rx, ru, rN, rd, d0 = _residuals(lqr, x0, free, sol)
             # the correction is the same LQR's solution for the residuals (signs as its data: stationarity -r,
             # dynamics +rd, start +d0)
             dX, dU, dL, dl0 = solver(lqr._replace(q=-jnp.concatenate([rx, ru], 1), qN=-rN, e=rd), d0, free)
             return X - dX, U - dU, L - dL, lam0 - dl0
 
         # (a fori_loop: the solver's program once however many rounds)
-        X, U, L, lam0 = jax.lax.fori_loop(0, rounds, round_, solver(lqr, x0, free))
-        return X, U, L, lam0
+        return jax.lax.fori_loop(0, rounds, round_, solver(lqr, x0, free))
 
     return solve
 
 
-__all__ = ['LQR', 'eliminate_equalities', 'refined', 'restore', 'riccati_parallel', 'riccati_scan']
+def relative_residual(lqr: LQR, x0: Array, free: Any, sol: tuple) -> Array:
+    """The KKT residuals' largest entry over the data's (q, qN, e, the start): the solve's accuracy, scale-free."""
+    rx, ru, rN, rd, d0 = _residuals(lqr, x0, free, sol)
+    worst = jnp.max(jnp.stack([jnp.max(jnp.abs(r)) for r in (rx, ru, rN, rd, d0)]))
+    scale = jnp.max(jnp.stack([jnp.max(jnp.abs(lqr.q)), jnp.max(jnp.abs(lqr.qN)), jnp.max(jnp.abs(lqr.e)), jnp.max(jnp.abs(x0)), 1.0]))
+    return worst / scale
+
+
+GUARD_TOL = 1e-9  # the parallel solve's accepted relative residual
+
+
+def guarded(rounds: int = 2, tol: float = GUARD_TOL) -> Any:
+    """The parallel Riccati refined ``rounds`` times, its relative KKT residual checked, and the sequential recursion's
+    solution taken in its place when the residual is above ``tol`` (``lax.cond``: on a GPU the scan runs only then).
+    The parallel solve's steps on the wing's recon chains (784 stages, co-design) were too inexact for the
+    interior-point method: the stock chain stalled at stationarity 1e5 after 170 iterations where the scan converged in
+    about 30 (2026-11-23)."""
+    fast = refined(riccati_parallel, rounds)
+
+    def solve(lqr: LQR, x0: Array, free: Any) -> tuple:
+        sol = fast(lqr, x0, free)
+        ok = relative_residual(lqr, x0, free, sol) <= tol
+        return jax.lax.cond(ok, lambda: sol, lambda: riccati_scan(lqr, x0, free))
+
+    return solve
+
+
+__all__ = ['LQR', 'eliminate_equalities', 'guarded', 'refined', 'relative_residual', 'restore', 'riccati_parallel', 'riccati_scan']

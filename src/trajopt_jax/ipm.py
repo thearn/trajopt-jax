@@ -21,7 +21,7 @@ import numpy as np
 from trajopt_jax._jax import Array, jax, jnp
 from trajopt_jax.problem import StageProblem
 from trajopt_jax.result import IPMResult
-from trajopt_jax.riccati import LQR, eliminate_equalities, refined, restore, riccati_parallel, riccati_scan
+from trajopt_jax.riccati import LQR, eliminate_equalities, guarded, restore, riccati_scan
 
 SHIFTS = (0.0, 1e-10, 1e-8, 1e-6, 1e-4, 1e-3, 1e-2, 1e-1, 1.0, 10.0, 100.0)  # the inertia ladder (added to the damping)
 BACKTRACK = 12  # step lengths a_p 2^-j
@@ -129,8 +129,8 @@ class _Step:
         self.jac_f = chunked(jax.jacfwd(raw['dyn'], argnums=(0, 1)), chunk)
         self.jac_g = chunked(jax.jacfwd(raw['ineq'], argnums=(0, 1)), chunk)
         self.ci, self.cscale = prob.ci, float(prob.ref[prob.ci] / 10.0)
-        # the parallel scan refined once (its stationarity residual 2.5e-5 -> 1.4e-9 at 11,000 stages; the sequential ~1e-14)
-        self.solve_lqr = refined(riccati_parallel) if parallel else riccati_scan
+        # the parallel scan refined and checked, the sequential recursion when its residual is too large (riccati.guarded)
+        self.solve_lqr = guarded() if parallel else riccati_scan
         self.eye_v, self.eye_x = jnp.eye(self.nx + self.nu), jnp.eye(self.nx)
 
     def evaluate(self, X: Array, U: Array, st: Array) -> tuple:
@@ -531,12 +531,15 @@ def solve(
     warm: dict | None = None,
     data: tuple | None = None,
 ) -> IPMResult:
-    """The device iteration from (X, U), the start ``x0``; ``parallel`` (default: on a GPU) picks the parallel-in-time
+    """The device iteration from (X, U), the start ``x0``; ``parallel`` (default off; ``True`` opts in, guarded by its residual) picks the parallel-in-time
     Riccati. Converged when stationarity, feasibility and complementarity are all below ``tol``. ``warm``: a
     converged neighbour's ``res.state`` (see warm_state), with a small ``mu0``. ``data``: per-stage (masks, ends) in
     place of the problem's (``StageProblem.with_wind``): the same compiled step."""
     if parallel is None:
-        parallel = jax.devices()[0].platform == 'gpu'
+        # (the sequential recursion by default, on a GPU too: the parallel solve's steps were too inexact on the wing's
+        # recon chains, and guarded it fell back to the scan nearly every step, 26 s an iteration against the scan's
+        # 11; parallel=True opts in, guarded, where it is accurate, 2026-11-23)
+        parallel = False
     t0 = time.time()
     st = initial_state(prob, X, U, x0, mu0, data) if warm is None else warm_state(prob, warm, X, U, x0, mu0, data)
     if chunk is None:  # the stage passes whole when they fit, else in blocks that do (chunking a pass that fits cost the

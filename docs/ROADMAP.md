@@ -16,3 +16,8 @@ departure), 2026-11-23.
   2027-09-01 (launch 2026-08-09, 387 days, 252 kg) but its bang-bang optimum re-propagates 55-76 thousand km off at
   120-240 stages (the switches need refinement or switch times as variables), and Mars arriving 2033-07-08 is out of
   phase with its launch windows (to retry with a 0.3-2.6 yr flight window). Not committed until those close.
+- **A parallel Riccati that holds its accuracy.** On the wing's 784-stage recon chains the parallel-in-time solve's
+  steps were too inexact for the interior-point method (stationarity stalled at 1e5; E20's co-design never converged
+  on it), so the sequential scan is the default since 2026-11-23 and `parallel=True` is guarded (residual checked,
+  the scan when it fails). Guarded it fell back nearly every step there. Open: why its residual is large on these
+  (conditioning of the associative combine, the refinement's own accuracy) and a form that keeps the speed.

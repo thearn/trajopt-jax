@@ -233,3 +233,29 @@ def _count_equations(jaxpr) -> int:
                 if inner is not None and hasattr(inner, 'eqns'):
                     n += _count_equations(inner)
     return n
+
+
+def test_the_guarded_parallel_riccati_falls_back_to_the_scan_when_inexact() -> None:
+    """``guarded``: the relative KKT residual of an exact solve is near zero and of a perturbed one is not; with the
+    tolerance unreachable the scan's solution comes back, with it generous the refined parallel one, both exact."""
+    import jax
+
+    jax.config.update('jax_enable_x64', True)
+    from trajopt_jax.riccati import guarded, relative_residual, riccati_scan
+
+    rng = np.random.default_rng(7)
+    N, nx, nu = 40, 5, 3
+    nv = nx + nu
+    Q = np.array([(lambda M: M @ M.T + 0.5 * np.eye(nv))(rng.standard_normal((nv, nv))) for _ in range(N)])
+    QN = (lambda M: M @ M.T + 0.5 * np.eye(nx))(rng.standard_normal((nx, nx)))
+    q, qN = rng.standard_normal((N, nv)), rng.standard_normal(nx)
+    A, B, e = rng.standard_normal((N, nx, nx)) * 0.4, rng.standard_normal((N, nx, nu)), rng.standard_normal((N, nx))
+    lqr, x0 = LQR(Q, QN, q, qN, A, B, e), rng.standard_normal(nx)
+    scan = riccati_scan(lqr, x0, nx - 1)
+    assert float(relative_residual(lqr, x0, nx - 1, scan)) < 1e-10
+    off = (scan[0] + 1e-3, *scan[1:])
+    assert float(relative_residual(lqr, x0, nx - 1, off)) > 1e-5
+    for tol in (0.0, 1.0):  # (0: never accepted, the scan; 1: always, the refined parallel solve)
+        got = guarded(tol=tol)(lqr, x0, nx - 1)
+        for a, b in zip(got, scan, strict=True):
+            np.testing.assert_allclose(np.asarray(a), np.asarray(b), atol=1e-8)
