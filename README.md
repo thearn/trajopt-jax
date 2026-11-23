@@ -21,7 +21,8 @@ Examples, each with a notebook that states the problem's equations:
 - **All JAX.** Your model's dynamics are a JAX function; derivatives (Jacobians and exact Hessians) come from JAX,
   so there are no hand-written partials and no finite differences.
 - **GPU native, with its own solver.** A primal-dual interior-point method whose linear algebra is a Riccati
-  recursion, run in parallel over time on a GPU (sequential on a CPU); the whole iteration compiles to one XLA program.
+  recursion; the whole iteration compiles to one XLA program. The recursion is sequential by default; a parallel-in-time
+  form (`parallel=True`) is available, checked by its own residual, for problems where it holds its accuracy.
 - **Radau collocation for vehicle models.** Multi-leg problems with free leg durations, controls linear across
   stages with box and rate limits, path constraints on any model output.
 - **Missions as events.** Legs end at gates, points, boxes or state caps and can hold constraints along their
