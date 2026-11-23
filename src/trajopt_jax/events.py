@@ -170,6 +170,7 @@ class Leg:
     min_s: float = T_LEG_MIN
     max_s: float = 30.0
     segments: int | None = None  # this leg's stage count (None: the problem's); refine a short or fast-changing leg
+    mesh: tuple[float, ...] | None = None  # this leg's stage fractions of its time (sum 1): a refined mesh, over segments
     cost_weight: float = 1.0  # the cost's rate on this leg times this (0: the leg costs nothing, e.g. the return in range)
 
     def seed_path(self, a: np.ndarray, speed: float, start: np.ndarray) -> tuple[np.ndarray, float, object]:
