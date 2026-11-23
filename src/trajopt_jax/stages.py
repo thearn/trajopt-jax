@@ -77,7 +77,16 @@ class Stages:
         self.nx, self.nu = self.ns + self.nc + self.nl + 1, self.nc + 1 + 3 * self.ns
         self.free = np.arange(self.ns + self.nc, self.nx)  # (the design variables when co-designing; the leg time)
         # (each leg's stage count: its own, or the problem's; a short or fast-changing leg can be refined alone)
-        self.leg_S = [leg.segments or self.segments for leg in self.legs]
+        # (each leg's stages: its mesh (fractions of its time), or its own count, or the problem's, uniform)
+        meshes = [
+            np.asarray(leg.mesh, float) if leg.mesh else np.full(leg.segments or self.segments, 1.0 / (leg.segments or self.segments))
+            for leg in self.legs
+        ]
+        for p, mesh in enumerate(meshes):
+            if abs(mesh.sum() - 1.0) > 1e-9 or np.any(mesh <= 0):
+                raise ValueError(f'leg {p}: mesh fractions must be positive and sum to 1')
+        self.frac = np.concatenate(meshes)  # (each stage's share of its leg's time)
+        self.leg_S = [len(mesh) for mesh in meshes]
         self.leg_start = [0, *np.cumsum(self.leg_S).tolist()]
         self.S, self.N = self.segments, int(self.leg_start[-1])
         self.stage_leg = np.repeat(np.arange(len(self.legs)), self.leg_S)
@@ -106,12 +115,12 @@ class Stages:
             self._kcol[kind] = col
             col += 1 + kind.width
         self._dcol = col
-        self._im = 3 + self.ns + self.nc  # (masks: the inverse stage count, then the model's data)
+        self._im = 3 + self.ns + self.nc  # (masks: the stage's fraction of its leg's time, then the model's data)
         masks = np.zeros((N, self._im + 1 + nd))
         last = {L0[p + 1] - 1 for p in range(len(self.legs))}
         masks[:, 0] = [1.0 if k in last else 0.0 for k in range(N)]
         masks[:, 1] = [self.legs[self.stage_leg[k]].cost_weight for k in range(N)]
-        masks[:, self._im] = [1.0 / self.leg_S[self.stage_leg[k]] for k in range(N)]
+        masks[:, self._im] = self.frac
         ends = np.zeros((N + 1, col + nd))
         ends[N, 0] = 1.0
         ends[0, 3] = 1.0
@@ -121,13 +130,13 @@ class Stages:
             ends[k, 4 : 5 + self.ns + self.nc] = block
         for p, leg in enumerate(self.legs):
             ends[L0[p] : L0[p + 1] + 1, 1:3] = (leg.min_s, leg.max_s)
-            ends[L0[p] : L0[p + 1], self._ie] = 1.0 / self.leg_S[p]
+            ends[L0[p] : L0[p + 1], self._ie] = self.frac[L0[p] : L0[p + 1]]
             for ev in leg.end:
                 self._write(ends, L0[p + 1], ev)
             for ev in leg.along:
                 for k in range(L0[p] + 1, L0[p + 1] + 1):
                     self._write(ends, k, ev)
-        ends[N, self._ie] = 1.0 / self.leg_S[-1]
+        ends[N, self._ie] = self.frac[-1]
         self.masks, self.ends = masks, ends
 
     def _write(self, ends: np.ndarray, k: int, ev: Any) -> None:
@@ -327,7 +336,8 @@ class Stages:
         for k in range(self.N):
             p = int(self.stage_leg[k])
             j, S = k - L0[p], self.leg_S[p]
-            Y = [state(p, (j + ck) / S) for ck in c]
+            w0, fk = float(self.frac[L0[p] : k].sum()), float(self.frac[k])
+            Y = [state(p, w0 + ck * fk) for ck in c]
             last = j == S - 1
             nxt = taus[min(p + 1, len(taus) - 1)]
             # (at a junction the stage's state is the last mission's end, its start reset from the data)
@@ -363,6 +373,6 @@ def chained(model: Any, missions: list[Mission], segments: int = 20, codesign: b
         if i:
             junctions[n_stage] = (np.asarray(mis.start, float), np.asarray(mis.start_u, float))
         legs += [dataclasses.replace(leg, cost_weight=leg.cost_weight * mis.weight) for leg in mis.legs]
-        n_stage += sum(leg.segments or segments for leg in mis.legs)
+        n_stage += sum(len(leg.mesh) if leg.mesh else (leg.segments or segments) for leg in mis.legs)
     first = missions[0]
     return Stages(model, first.start, first.start_u, tuple(legs), segments=segments, codesign=codesign, junctions=junctions)
