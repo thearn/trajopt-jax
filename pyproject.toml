@@ -5,12 +5,15 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "trajopt-jax"
 version = "0.1.0"
-description = "Trajectory optimisation in JAX on the GPU: interior-point solver with Riccati linear algebra and a Radau transcription for vehicle models"
+description = "Trajectory optimisation in JAX on the GPU: interior-point solver, Riccati linear algebra, Radau transcription"
+license = "MIT"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = ["jax>=0.4.30", "numpy>=1.26"]
 
 [project.optional-dependencies]
 test = ["pytest>=8", "ruff==0.14.0", "vulture==2.14", "scipy>=1.11"]
+examples = ["matplotlib>=3.8"]
 ipopt = ["cyipopt>=1.4"]
 
 [tool.setuptools.packages.find]
