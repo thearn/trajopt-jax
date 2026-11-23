@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trajopt-jax"
+version = "0.1.0"
+description = "Trajectory optimisation in JAX on the GPU: interior-point solver with Riccati linear algebra and a Radau transcription for vehicle models"
+requires-python = ">=3.11"
+dependencies = ["jax>=0.4.30", "numpy>=1.26"]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "ruff==0.14.0", "vulture==2.14", "scipy>=1.11"]
+ipopt = ["cyipopt>=1.4"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 150
+target-version = "py311"
+
+[tool.ruff.format]
+quote-style = "single"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I", "UP", "SIM", "BLE"]
+ignore = ["E731", "E741", "SIM108", "SIM117", "SIM105", "SIM102"]
+
+[tool.quality]
+package = "src/trajopt_jax"
+python = "~/.venvs/trajopt-jax/bin/python"
+typecheck = "absolute"
+absolute = ["function_size", "function_complexity", "function_parameters", "function_any", "module_size", "duplicate", "pass_through", "noqa"]
+
+[tool.terminology]
+groups = ["lever", "limit"]
