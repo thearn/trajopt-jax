@@ -1,7 +1,7 @@
 """Names vulture reports on src/trajopt_jax alone that tests, the projects or a framework use."""
 
 # ruff: noqa: B018
-from trajopt_jax import batch, envelope, reference, refine, result, specs, stages
+from trajopt_jax import batch, envelope, nested, reference, refine, result, specs, stages
 
 envelope.with_data
 envelope.data_sensitivity
@@ -14,6 +14,8 @@ stages.Model.Model
 stages.Stages.design
 stages.Stages.path_seed
 stages.Stages.trajectory  # (the vehicles export solutions with it)
+nested.Nested  # (the vehicles' co-design drivers)
+nested.trust_region
 stages.chained
 
 # whitelist-audit: off  (record fields and constants a caller reads by attribute)
