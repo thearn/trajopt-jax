@@ -129,3 +129,17 @@ def test_refs_override_the_models_scales_and_leave_the_optimum() -> None:
     assert res.converged and float(res.X[0, -1]) == pytest.approx(math.sqrt(2 * d), rel=2e-3)
     with pytest.raises(ValueError, match='no such states'):
         Stages(DoubleIntegrator(), start, u0, legs, segments=30, refs={'height': 1.0})
+
+
+def test_stop_ends_at_rest_and_matches_the_bang_bang_time() -> None:
+    from trajopt_jax.events import Stop
+
+    d = 10.0  # (from rest to rest with |a| <= 1: accelerate half the way, brake half: T = 2 sqrt(d))
+    prob = Stages(
+        DoubleIntegrator(), np.array([0.0, 0.0, 0.0]), np.array([1.0]), (Leg((Point(d, None, None, tol=1e-3), Stop()), max_s=30.0),), segments=30
+    )
+    X, U = prob.path_seed(3.0)
+    res = ipm.solve(prob, X, U, prob.x0(X[0, -1]), max_iter=300, verbose=False)
+    assert res.converged, res.status
+    assert float(res.X[0, -1]) == pytest.approx(2.0 * math.sqrt(d), rel=5e-3)
+    assert abs(float(res.X[-1, 1] * prob.ref[1])) < 1e-3
