@@ -117,3 +117,15 @@ def test_data_sensitivity_matches_the_closed_form(p: float) -> None:
     assert float(res.X[0, -1]) == pytest.approx(math.sqrt(2 * d / p), rel=2e-3)
     grad = data_sensitivity(prob, res.X, res.U, res.state, chunk=7)  # (7: blocks that do not divide the 31 stages)
     assert grad[0] == pytest.approx(-float(res.obj) / (2 * p), rel=1e-4)
+
+
+def test_refs_override_the_models_scales_and_leave_the_optimum() -> None:
+    d = 10.0
+    start, u0, legs = np.array([0.0, 0.0, 0.0]), np.array([1.0]), (Leg((Point(d, None, None, tol=1e-3),), max_s=30.0),)
+    prob = Stages(DoubleIntegrator(), start, u0, legs, segments=30, refs={'x': 1.0, 'v': 5.0})
+    assert prob.ref[0] == 1.0 and prob.ref[1] == 5.0
+    X, U = prob.path_seed(3.0)
+    res = ipm.solve(prob, X, U, prob.x0(X[0, -1]), max_iter=300, verbose=False)
+    assert res.converged and float(res.X[0, -1]) == pytest.approx(math.sqrt(2 * d), rel=2e-3)
+    with pytest.raises(ValueError, match='no such states'):
+        Stages(DoubleIntegrator(), start, u0, legs, segments=30, refs={'height': 1.0})

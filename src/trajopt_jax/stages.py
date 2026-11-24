@@ -66,13 +66,20 @@ class Stages:
     # launch date, the position Earth's on it, the speed within the launch vehicle's)
     start_free: tuple[str, ...] = ()
     start_events: tuple = ()
+    # the states' scales for this problem, by name, in place of the model's StateSpec.ref: a mission far from the one the
+    # model's scales were set for (the wing's height scale 10 m, a ceiling's climb 2.8 km: scaled heights of 280, a 6-DOF
+    # solve at regularisation 1e10 with no accepted step, 2026-11-24)
+    refs: dict = field(default_factory=dict)
     info: dict = field(default_factory=dict)
     node_second_order: ClassVar[bool] = False
 
     def __post_init__(self) -> None:
         m = self.model
         self.ns, self.nc = len(m.states), len(m.controls)
-        self.ref = np.array([s.ref for s in m.states])
+        unknown = set(self.refs) - {s.name for s in m.states}
+        if unknown:
+            raise ValueError(f'refs: no such states {sorted(unknown)}')
+        self.ref = np.array([float(self.refs.get(s.name, s.ref)) for s in m.states])
         self.si = {s.name: i for i, s in enumerate(m.states)}
         self.ci = self.si['cost']
         p0 = np.asarray(m.params(), float)
