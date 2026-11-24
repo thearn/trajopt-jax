@@ -160,7 +160,23 @@ class Touchdown:
         return [jnp.sqrt(vel[0] ** 2 + vel[1] ** 2 + 1e-9) - e[0], -vel[2] - e[1]]
 
 
-Event = Gate | Point | Orbit | StateCap | Box | Touchdown
+@dataclass(frozen=True)
+class Stop:
+    """At the leg's end: at rest, each velocity component within ``tol`` (m/s) of zero (a hover at the finish, the
+    whoop's courses' stop)."""
+
+    tol: float = BAND
+    width: ClassVar[int] = 1
+
+    def columns(self) -> list[float]:
+        return [self.tol]
+
+    @staticmethod
+    def rows(s: Array, pos: Array, vel: Array, e: Array) -> list:
+        return [*(vel - e[0]), *(-vel - e[0])]
+
+
+Event = Gate | Point | Orbit | StateCap | Box | Touchdown | Stop
 
 
 @dataclass(frozen=True)
@@ -193,7 +209,7 @@ class Leg:
                 return pos, speed * np.array([-math.sin(th), math.cos(th), 0.0])
 
             return at(1.0)[0], tau, at
-        placed = [e for e in self.end if not isinstance(e, StateCap)]
+        placed = [e for e in self.end if not isinstance(e, StateCap | Stop | Touchdown)]
         b = placed[0].aim(start) if placed else a
         dist = float(np.linalg.norm(b - a))
         tau = float(np.clip(dist / speed, max(self.min_s, T_LEG_MIN), self.max_s))
