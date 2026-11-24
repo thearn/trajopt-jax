@@ -19,24 +19,30 @@ from trajopt_jax._jax import jax, jnp
 from trajopt_jax.stages import Stages
 
 
-def with_data(prob: Stages, row: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """(masks, ends) with every stage's model data set to ``row``: ``ipm.solve(..., data=...)``'s argument."""
-    nd = prob.model.data_width
-    masks, ends = prob.masks.copy(), prob.ends.copy()
-    masks[:, prob._im + 1 : prob._im + 1 + nd] = row
-    ends[:, prob._dcol : prob._dcol + nd] = row
+def with_data(
+    prob: Stages, row: np.ndarray, base: tuple[np.ndarray, np.ndarray] | None = None, columns: slice | None = None
+) -> tuple[np.ndarray, np.ndarray]:
+    """(masks, ends) with every stage's model data in ``columns`` (all of it by default) set to ``row``, the rest as in
+    ``base`` (the problem's own by default): ``ipm.solve(..., data=...)``'s argument."""
+    cols = columns or slice(0, prob.model.data_width)
+    masks, ends = (prob.masks.copy(), prob.ends.copy()) if base is None else (base[0].copy(), base[1].copy())
+    im, dc = prob._im + 1, prob._dcol
+    masks[:, im + cols.start : im + cols.stop] = row
+    ends[:, dc + cols.start : dc + cols.stop] = row
     return masks, ends
 
 
-def data_sensitivity(prob: Stages, X: np.ndarray, U: np.ndarray, state: dict, chunk: int = 128) -> np.ndarray:
-    """d(obj*)/d(data) for model data the same at every stage (``with_data``), at the solution ``X, U`` with the solver
-    state ``state`` (IPMResult.state: the multipliers ``v``, ``nuh`` and the stage data ``masks``, ``ends``). The stages
-    in blocks of ``chunk``."""
-    nd, N = prob.model.data_width, prob.N
+def data_sensitivity(prob: Stages, X: np.ndarray, U: np.ndarray, state: dict, chunk: int = 128, columns: slice | None = None) -> np.ndarray:
+    """d(obj*)/d(data) for the model data in ``columns`` (all of it by default), the same at every stage (``with_data``),
+    at the solution ``X, U`` with the solver state ``state`` (IPMResult.state: the multipliers ``v``, ``nuh`` and the stage
+    data ``masks``, ``ends``); data outside ``columns`` (a stage's own: the whoop's wind on one course) is held. The
+    stages in blocks of ``chunk``."""
+    cols = columns or slice(0, prob.model.data_width)
+    nd, N = cols.stop - cols.start, prob.N
     if not nd:
-        raise ValueError('data_sensitivity needs a model with data (data_width > 0)')
+        raise ValueError('data_sensitivity needs data columns (a model with data_width > 0)')
     ineq, defects = prob.raw['ineq'], prob.raw['defects']
-    im, dc = prob._im + 1, prob._dcol
+    im, dc = prob._im + 1 + cols.start, prob._dcol + cols.start
     Uz = np.concatenate([U, np.zeros((1, U.shape[1]))])
     v, nuh = np.asarray(state['v']), np.asarray(state['nuh'])
     masks, ends = np.asarray(state['masks']), np.asarray(state['ends'])
