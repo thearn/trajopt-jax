@@ -143,3 +143,13 @@ def test_stop_ends_at_rest_and_matches_the_bang_bang_time() -> None:
     assert res.converged, res.status
     assert float(res.X[0, -1]) == pytest.approx(2.0 * math.sqrt(d), rel=5e-3)
     assert abs(float(res.X[-1, 1] * prob.ref[1])) < 1e-3
+
+
+def test_trajectory_gives_times_and_named_unscaled_states() -> None:
+    d = 10.0
+    prob = Stages(DoubleIntegrator(), np.array([0.0, 0.0, 0.0]), np.array([1.0]), (Leg((Point(d, None, None, tol=1e-3),), max_s=30.0),), segments=30)
+    X, U = prob.path_seed(3.0)
+    tr = prob.trajectory(X)
+    assert tr['t'][0] == 0.0 and tr['t'][-1] == pytest.approx(float(X[0, -1]))
+    assert tr[prob.model.states[0].name][-1] == pytest.approx(float(X[-1, 0] * prob.ref[0]))
+    assert len(tr['t']) == prob.N + 1 and set(tr['mission']) == {0}
