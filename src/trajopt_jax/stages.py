@@ -59,6 +59,11 @@ class Stages:
     # co-designing: the model's design variables as constant states, free at the start, held within the model's
     # ``design_bounds()`` at stage 0 (as whoop.ocp.StageProblem does)
     codesign: bool = False
+    # with ``codesign``: False pins the design variables at the start's (``x0(design=...)``), so the solve is a fixed
+    # design's and -lam0 on their components is d(obj*)/d(design) (envelope theorem): the gradient a nested co-design's
+    # outer loop takes. (All-at-once co-design of the wing's recon chain stalled at "acceptable" at two different
+    # designs, both beaten by a fixed design 2.3 % lower, 2026-11-23; the fixed solves themselves converge cleanly)
+    design_free: bool = True
     # chained missions: {first stage of a later mission: (its start state, unscaled; its start controls)}
     junctions: dict = field(default_factory=dict)
     # a start pinned by constraints: these states (by name) left free at stage 0, which ``start_events`` (events judged
@@ -84,7 +89,8 @@ class Stages:
         if len(free_states) != len(set(free_states)) or self.si['cost'] in free_states:
             raise ValueError('start_free: each state once, never the cost')
         # (the design variables when co-designing, the leg time, and the start states left free)
-        self.free = np.concatenate([np.asarray(free_states, int), np.arange(self.ns + self.nc, self.nx)])
+        moving = np.arange(self.ns + self.nc, self.nx) if self.design_free else np.array([self.nx - 1])
+        self.free = np.concatenate([np.asarray(free_states, int), moving])
         # (each leg's stage count: its own, or the problem's; a short or fast-changing leg can be refined alone)
         # (each leg's stages: its mesh (fractions of its time), or its own count, or the problem's, uniform)
         meshes = [
@@ -169,10 +175,19 @@ class Stages:
         s0 = jnp.where(jr, row[j + 1 : j + 1 + ns].at[ci].set(x[ci]), x[:ns])
         return s0, jnp.where(jr, row[j + 1 + ns : j + 1 + ns + nc], x[ns : ns + nc])
 
-    def x0(self, tau: float) -> np.ndarray:
-        """The start (scaled states, start controls, [scaled design variables], the first leg's duration ``tau``)."""
-        lev = np.asarray(self.model.params(), float)[: self.nl] / self.design_var_ref[: self.nl]
+    def x0(self, tau: float, design: np.ndarray | None = None) -> np.ndarray:
+        """The start (scaled states, start controls, [scaled design variables: ``design``, unscaled, or the model's],
+        the first leg's duration ``tau``)."""
+        p = np.asarray(self.model.params() if design is None else design, float)
+        lev = p[: self.nl] / self.design_var_ref[: self.nl]
         return np.concatenate([np.asarray(self.start) / self.ref, self.start_u, lev, [tau]])
+
+    def design_gradient(self, lam0: np.ndarray) -> np.ndarray:
+        """d(obj*)/d(design), unscaled, from a solve with the design pinned (``design_free=False``): -lam0 on the design
+        components (the start rows' multipliers, envelope theorem) over their scale."""
+        if not self.nl or self.design_free:
+            raise ValueError('design_gradient needs codesign=True and design_free=False')
+        return -np.asarray(lam0)[self._il] / self.design_var_ref
 
     def design(self, x: np.ndarray) -> np.ndarray:
         """The design variables a stage state carries (unscaled), or the model's when not co-designing."""
@@ -244,7 +259,7 @@ class Stages:
             for kind, col in kcol.items():
                 on = e[col] > 0
                 g += [jnp.where(on, r, -1.0) for r in kind.rows(s_end, pos, vel, e[col + 1 : col + 1 + kind.width])]
-            if nl:  # (the design variables' bounds, at the first stage only: repeated, active rows would be dependent)
+            if nl and self.design_free:  # (pinned, the outer loop holds them. The design variables' bounds, at the first stage only: repeated, active rows would be dependent)
                 lev = x[self._il]
                 g += [jnp.where(e[3] > 0, r, -1.0) for r in [*(lev_lo - lev), *(lev - lev_hi)]]
                 # (the model's design constraints on the design variables alone, e.g. a wing-loading cap: at stage 0)
@@ -377,7 +392,7 @@ class Mission:
     weight: float = 1.0
 
 
-def chained(model: Any, missions: list[Mission], segments: int = 20, codesign: bool = False) -> Stages:
+def chained(model: Any, missions: list[Mission], segments: int = 20, codesign: bool = False, design_free: bool = True) -> Stages:
     """Every mission in one stage problem (one design across them when co-designing): the legs in sequence, each later
     mission's first stage a junction that resets the state to its start (the cost carried), each leg's cost weight
     times its mission's (whoop.ocp.StageProblem.chained's form)."""
@@ -390,4 +405,6 @@ def chained(model: Any, missions: list[Mission], segments: int = 20, codesign: b
         legs += [dataclasses.replace(leg, cost_weight=leg.cost_weight * mis.weight) for leg in mis.legs]
         n_stage += sum(len(leg.mesh) if leg.mesh else (leg.segments or segments) for leg in mis.legs)
     first = missions[0]
-    return Stages(model, first.start, first.start_u, tuple(legs), segments=segments, codesign=codesign, junctions=junctions)
+    return Stages(
+        model, first.start, first.start_u, tuple(legs), segments=segments, codesign=codesign, junctions=junctions, design_free=design_free
+    )

@@ -91,3 +91,37 @@ def test_brachistochrone_matches_the_cycloid() -> None:
     t_cycloid = phi * math.sqrt(R / G)
     t = solve(Brachistochrone(), np.array([0.0, 0.0, 0.0, 0.0]), np.array([0.5]), Point(D, -H, None, tol=1e-3), speed=5.0)
     assert t == pytest.approx(t_cycloid, rel=2e-3)
+
+
+class ScaledIntegrator(DoubleIntegrator):
+    """x'' = p a, |a| <= 1: the minimum time to ``d`` from rest is sqrt(2 d / p), so d(T)/d(p) = -T / (2 p)."""
+
+    def __init__(self, p: float) -> None:
+        self.p = p
+
+    def params(self) -> np.ndarray:
+        return jnp.array([self.p])
+
+    def design_bounds(self) -> list[tuple[float, float]]:
+        return [(0.1, 10.0)]
+
+    def design_constraints(self, p):  # noqa: ANN001, ANN201 - the model protocol
+        return []
+
+    def rhs(self, s, u, u_rate, p, data):  # noqa: ANN001, ANN201 - the model protocol
+        return jnp.stack([s[1], p[0] * u[0], jnp.ones(())]), jnp.zeros(1)
+
+
+@pytest.mark.parametrize('p', [1.0, 2.5])
+def test_pinned_design_gradient_matches_the_closed_form(p: float) -> None:
+    d = 10.0
+    model = ScaledIntegrator(p)
+    prob = Stages(model, np.array([0.0, 0.0, 0.0]), np.array([1.0]), (Leg((Point(d, None, None, tol=1e-3),), max_s=30.0),), segments=30,
+                  codesign=True, design_free=False)  # fmt: skip
+    X, U = prob.path_seed(3.0)
+    res = ipm.solve(prob, X, U, prob.x0(X[0, -1]), max_iter=300, verbose=False)
+    assert res.converged, res.status
+    assert float(res.X[0, -1]) == pytest.approx(math.sqrt(2 * d / p), rel=2e-3)  # (pinned: the design did not move)
+    np.testing.assert_allclose(prob.design(res.X[0]), [p])
+    grad = prob.design_gradient(res.lam0)
+    assert grad[0] == pytest.approx(-float(res.obj) / (2 * p), rel=1e-4)
