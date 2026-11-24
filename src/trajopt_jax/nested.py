@@ -94,10 +94,13 @@ class Nested:
         res = ipm.solve(prob, self.X, self.U, x0, max_iter=self.max_iter, verbose=self.verbose, parallel=False, data=data, **warm)
         grad = np.asarray(to_design(jnp.asarray(data_sensitivity(prob, res.X, res.U, res.state, columns=self.columns)))[0])
         if to_head is not None:
+            if res.lam0 is None:
+                raise ValueError("a design-dependent start needs the start rows' multipliers (IPMResult.lam0)")
             grad = grad + np.asarray(to_head(-jnp.asarray(res.lam0[:n_head]))[0])
         if res.converged:  # (the next solve starts from this one: warm only from a converged point)
             self.X, self.U, self.state, self.at = res.X, res.U, res.state, design.copy()
-            if self.best is None or res.obj < self.best[0]:
+            best = self.best
+            if best is None or res.obj < best[0]:
                 self.best = (float(res.obj), design.copy(), res.X, res.U)
         line = dict(design=design.tolist(), obj=float(res.obj), grad=grad.tolist(), status=res.status, iterations=int(res.iterations),
                     seconds=round(time.time() - t, 1), step=step)  # fmt: skip
