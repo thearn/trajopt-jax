@@ -23,6 +23,8 @@ ipopt = ["cyipopt>=1.4"]
 where = ["src"]
 
 [tool.pytest.ini_options]
+addopts = "-m 'not gate'"
+markers = ["gate: style and structure checks run when work lands on main (git land), not on branches"]
 pythonpath = ["src"]
 testpaths = ["tests"]
 
