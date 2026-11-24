@@ -185,6 +185,25 @@ class Stages:
         """The design variables a stage state carries (unscaled), or the model's when not co-designing."""
         return np.asarray(x)[self._il] * self.design_var_ref if self.nl else np.asarray(self.model.params())
 
+    def trajectory(self, X: np.ndarray) -> dict[str, np.ndarray]:
+        """A solution as plain arrays: 't' (s, each stage start and the end, restarting at 0 for each chained mission),
+        'mission' and 'leg' (each row's), each state by name (unscaled), each control by name (the stage start's; the
+        end row repeats the last), and the design variables ('design', unscaled)."""
+        X = np.asarray(X)
+        dt = X[:-1, -1] * self.frac
+        starts = np.zeros(self.N + 1, bool)
+        starts[0] = True
+        starts[list(self.junctions)] = True
+        mission = np.cumsum(starts) - 1
+        t = np.zeros(self.N + 1)
+        for k in range(1, self.N + 1):
+            t[k] = 0.0 if starts[k] and k < self.N else t[k - 1] + dt[k - 1]
+        leg = np.concatenate([self.stage_leg, self.stage_leg[-1:]])
+        out = {'t': t, 'mission': mission, 'leg': leg, 'design': self.design(X[0])}
+        out |= {st.name: X[:, i] * self.ref[i] for i, st in enumerate(self.model.states)}
+        out |= {c.name: X[:, self.ns + j] for j, c in enumerate(self.model.controls)}
+        return out
+
     # -------------------------------------------------------------------------------------------------- the stages
     def _node(self, s: Array, u: Array, rate: Array, data: Array, x: Array | None = None) -> tuple[Array, Array]:
         """The model at unscaled ``s``; its design variables from the stage state ``x`` when co-designing."""

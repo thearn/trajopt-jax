@@ -13,6 +13,7 @@ refine.solve_refined
 stages.Model.Model
 stages.Stages.design
 stages.Stages.path_seed
+stages.Stages.trajectory  # (the vehicles export solutions with it)
 stages.chained
 
 # whitelist-audit: off  (record fields and constants a caller reads by attribute)
