@@ -67,3 +67,11 @@ def test_a_design_variable_at_zero_takes_no_continuation_steps() -> None:
     inner(np.zeros(1))
     inner(np.array([1e-3]))
     assert len(inner.log) == 2 and not any(line['step'] for line in inner.log)
+
+
+def test_a_nan_design_gradient_stops_the_run() -> None:
+    prob = _problem(DataScaledIntegrator())
+    X, U = prob.path_seed(3.0)
+    inner = Nested(prob, X, U, lambda p: jnp.sqrt(p - 1.0), max_iter=50)  # (sqrt at 0: an infinite slope)
+    with pytest.raises(FloatingPointError):
+        inner(np.array([1.0]))
