@@ -75,3 +75,18 @@ def test_a_nan_design_gradient_stops_the_run() -> None:
     inner = Nested(prob, X, U, lambda p: jnp.sqrt(p - 1.0), max_iter=50)  # (sqrt at 0: an infinite slope)
     with pytest.raises(FloatingPointError):
         inner(np.array([1.0]))
+
+
+def test_check_agrees_with_the_re_solves_and_the_closed_form() -> None:
+    prob = _problem(DataScaledIntegrator())
+    X, U = prob.path_seed(3.0)
+    out = Nested(prob, X, U, lambda p: p, max_iter=300).check(np.array([2.0]), np.array([0.05]))
+    exact = -0.5 * math.sqrt(2 * D / 2.0) / 2.0 / 10.0 * 0.05  # (d(T/10)/dp along the step: T = sqrt(2 d / p))
+    assert out['envelope'] == pytest.approx(exact, rel=5e-3) and out['resolves'] == pytest.approx(exact, rel=5e-3)
+
+
+def test_optimise_runs_to_the_bound_a_falling_objective_meets() -> None:
+    prob = _problem(DataScaledIntegrator())
+    X, U = prob.path_seed(3.0)
+    out = Nested(prob, X, U, lambda p: p, max_iter=300).optimise(np.array([1.0]), np.array([0.5]), np.array([2.0]), maxiter=20)
+    assert out['design'][0] == pytest.approx(2.0) and out['objective'] == pytest.approx(math.sqrt(2 * D / 2.0) / 10.0, rel=2e-3)

@@ -5,7 +5,8 @@ sensitivity to that data (trajopt_jax.envelope) chained through the data's own m
 ``Nested(prob, X, U, stage_data)`` solves at a design and returns (objective, gradient); each solve starts from the
 last converged one, its multipliers kept and its slacks on the central path at ``warm_mu``, and a design far from it is
 reached in steps of at most ``max_step`` (relative), each warm. ``trust_region`` is the outer loop: a box-constrained
-trust-region BFGS for a few design variables.
+trust-region BFGS for a few design variables; ``Nested.optimise`` runs it on the design over its size and
+``Nested.check`` compares the gradient with re-solves either side.
 
 Why (the wing, 2026-11-23/24): all-at-once co-design (the design as constant states) stalled at two designs both beaten
 by a fixed one, and with the design's map inside every node it took 5.5 GB a 128-stage block; restarted at mu 0.1 a
@@ -119,6 +120,48 @@ class Nested:
         if not step:
             self.cache[tuple(np.round(design, 9))] = out
         return out
+
+    def check(self, design: np.ndarray, step: np.ndarray) -> dict:
+        """The gradient at ``design`` against re-solves at ``design +- step`` from the same converged state (a check,
+        not the method): the envelope's directional derivative along ``step`` and the re-solves' central difference.
+        Near an optimum judge the absolute error (docs/SOLVING.md)."""
+        design, step = np.asarray(design, float), np.asarray(step, float)
+        obj, grad = self(design)
+        state, X, U, at = self.state, self.X, self.U, self.at
+        sides = []
+        for sign in (1.0, -1.0):
+            self.state, self.X, self.U, self.at = state, X, U, at
+            sides.append(self(design + sign * step)[0])
+        self.state, self.X, self.U, self.at = state, X, U, at
+        envelope, resolves = float(grad @ step), (sides[0] - sides[1]) / 2.0
+        print(f'along {np.array2string(step, precision=4)}: envelope {envelope:.6e}, re-solves {resolves:.6e}', flush=True)
+        return dict(design=design.tolist(), objective=obj, grad=grad.tolist(), envelope=envelope, resolves=float(resolves))
+
+    def optimise(
+        self, start: np.ndarray, lo: np.ndarray, hi: np.ndarray, feasible: Callable[[np.ndarray], bool] | None = None, maxiter: int = 30
+    ) -> dict:
+        """Co-design from ``start`` within ``lo``-``hi``: ``trust_region`` on the design over its size (``scale``, else
+        the start's, 1 where 0) and the objective over its magnitude at the start, ``feasible(design)`` holding each step;
+        the result's design solved last (its solution ``best`` when it is the best)."""
+        start = np.asarray(start, float)
+        size = self.scale if self.scale is not None else np.where(np.abs(start) > 1e-9, np.abs(start), 1.0)
+        obj0 = max(abs(self(start)[0]), 1e-12)  # (a magnitude: a range objective is negative, the distance flown)
+
+        def fg(z: np.ndarray) -> tuple[float, np.ndarray]:
+            obj, grad = self(z * size)
+            return obj / obj0, grad * size / obj0
+
+        ok = None if feasible is None else (lambda z: feasible(z * size))
+        t = time.time()
+        out = trust_region(fg, start / size, np.asarray(lo, float) / size, np.asarray(hi, float) / size, ok, maxiter)
+        design = out['z'] * size
+        obj, _ = self(design)
+        print(
+            f'outer: {out["message"]} ({out["iterations"]} iterations, {len(self.log)} solves, {time.time() - t:.0f} s) objective {obj:.6f}',
+            flush=True,
+        )
+        return dict(design=design.tolist(), objective=obj, message=out['message'], iterations=out['iterations'], solves=len(self.log),
+                    seconds=round(time.time() - t, 1))  # fmt: skip
 
 
 def trust_region(
