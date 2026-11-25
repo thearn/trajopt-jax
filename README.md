@@ -31,6 +31,11 @@ Examples, each with a notebook that states the problem's equations:
 - **Mesh refinement.** Passes that split the stages where the solution needs resolution.
 - **Checked** against closed-form optima (double integrator, brachistochrone) and IPOPT on the same problems.
 
+## Solving
+
+The default way to solve and co-design, the checks before a result is trusted, and what to try when a solve does
+not converge: [docs/SOLVING.md](docs/SOLVING.md).
+
 ## FAQ
 
 **Why use this over OpenMDAO/Dymos?** You probably shouldn't. This is an experimental repository aimed at hobby
