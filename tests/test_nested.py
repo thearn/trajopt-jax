@@ -56,3 +56,14 @@ def test_nested_trust_region_finds_the_closed_form_design() -> None:
     p_star = (math.sqrt(2 * D) / (20 * C)) ** (2 / 3)
     assert out['z'][0] * p0[0] == pytest.approx(p_star, rel=2e-3)
     assert any(line['step'] for line in inner.log)  # (the far designs reached in warm steps of at most MAX_STEP)
+
+
+def test_a_design_variable_at_zero_takes_no_continuation_steps() -> None:
+    # (sized against its own value, a variable at 0 took a 1e-7 step in thousands of warm solves: the whoop's prop pitch,
+    # 2026-11-25)
+    prob = _problem(TwoColumnIntegrator())
+    X, U = prob.path_seed(3.0)
+    inner = Nested(prob, X, U, lambda p: 1.0 + p, base=with_data(prob, np.array([2.0, 1.0])), columns=slice(1, 2), max_iter=300)
+    inner(np.zeros(1))
+    inner(np.array([1e-3]))
+    assert len(inner.log) == 2 and not any(line['step'] for line in inner.log)
