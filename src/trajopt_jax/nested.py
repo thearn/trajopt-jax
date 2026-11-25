@@ -38,7 +38,9 @@ class Nested:
     """The problem solved at a design: ``stage_data(p) -> row`` (JAX) puts the design into the model data's ``columns``
     of every stage (the rest from ``base``, each stage's own); ``start(p) -> (scaled start states, start controls)``, if
     given, makes the fixed start depend on the design too (a start trimmed for it), its share of the gradient through the
-    start rows' multipliers. ``report(prob, res) -> dict`` adds fields to each solve's log line. Each design's (objective,
+    start rows' multipliers. ``report(prob, res) -> dict`` adds fields to each solve's log line. ``scale``: each design
+    variable's typical size, the continuation's steps at most MAX_STEP of it (default the last converged value's size, 1
+    where that is 0: the whoop's stock prop pitch, whose first 1e-7 step went in 2400 steps). Each design's (objective,
     gradient) cached: optimisers ask for the function and the gradient at one point separately."""
 
     def __init__(
@@ -52,12 +54,14 @@ class Nested:
         base: tuple[np.ndarray, np.ndarray] | None = None,
         columns: slice | None = None,
         report: Callable[[Stages, Any], dict] | None = None,
+        scale: np.ndarray | None = None,
         max_iter: int = 500,
         verbose: bool = False,
     ) -> None:
         self.prob, self.X, self.U = prob, X, U
         self.stage_data, self.start, self.base, self.columns = stage_data, start, base, columns
         self.report, self.max_iter, self.verbose = report, max_iter, verbose
+        self.scale = None if scale is None else np.asarray(scale, float)
         self.cache: dict[tuple, tuple[float, np.ndarray]] = {}
         self.state: dict | None = None
         self.at: np.ndarray | None = None  # (the design of the last converged solve, which the next one starts from)
@@ -70,7 +74,8 @@ class Nested:
         if key in self.cache:
             return self.cache[key]
         if self.at is not None:  # (far from the last converged design: there in steps of at most MAX_STEP, each warm)
-            rel = np.abs(design - self.at) / np.maximum(np.abs(self.at), 1e-9)
+            size = self.scale if self.scale is not None else np.where(np.abs(self.at) > 1e-9, np.abs(self.at), 1.0)
+            rel = np.abs(design - self.at) / size
             n, at = int(np.ceil(np.max(rel) / MAX_STEP)), self.at.copy()
             for i in range(1, n):
                 self.solve(at + (design - at) * i / n, step=True)
