@@ -153,3 +153,20 @@ def test_trajectory_gives_times_and_named_unscaled_states() -> None:
     assert tr['t'][0] == 0.0 and tr['t'][-1] == pytest.approx(float(X[0, -1]))
     assert tr[prob.model.states[0].name][-1] == pytest.approx(float(X[-1, 0] * prob.ref[0]))
     assert len(tr['t']) == prob.N + 1 and set(tr['mission']) == {0}
+
+
+def test_a_chained_trajectory_ends_one_mission_and_starts_the_next_at_its_own_start() -> None:
+    from trajopt_jax.stages import Mission, chained
+
+    leg = Leg((Point(10.0, None, None, tol=1e-3),), max_s=30.0)
+    first = Mission(np.array([0.0, 0.0, 0.0]), np.array([1.0]), (leg,))
+    second = Mission(np.array([5.0, 0.0, 0.0]), np.array([1.0]), (leg,))
+    prob = chained(DoubleIntegrator(), [first, second], segments=10)
+    X, U = prob.path_seed(3.0)
+    tr = prob.trajectory(X)
+    (k,) = prob.junctions
+    x = tr[prob.model.states[0].name]
+    assert len(tr['t']) == prob.N + 2 and list(tr['mission']).count(0) == k + 1 and list(tr['stage'][k : k + 2]) == [k, k]
+    assert tr['mission'][k] == 0 and tr['t'][k] > 0.0 and x[k] == pytest.approx(float(X[k, 0] * prob.ref[0]))  # (the first's end)
+    assert tr['mission'][k + 1] == 1 and tr['t'][k + 1] == 0.0 and x[k + 1] == pytest.approx(5.0)  # (the second's own start)
+    assert np.all(np.diff(tr['t'][: k + 1]) > 0) and np.all(np.diff(tr['t'][k + 1 :]) > 0)

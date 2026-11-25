@@ -187,21 +187,31 @@ class Stages:
 
     def trajectory(self, X: np.ndarray) -> dict[str, np.ndarray]:
         """A solution as plain arrays: 't' (s, each stage start and the end, restarting at 0 for each chained mission),
-        'mission' and 'leg' (each row's), each state by name (unscaled), each control by name (the stage start's; the
-        end row repeats the last), and the design variables ('design', unscaled)."""
+        'mission', 'leg' and 'stage' (each row's: the stage, its model data's row), each state by name (unscaled), each
+        control by name (the stage start's; the end row repeats the last), and the design variables ('design',
+        unscaled). At a junction the row there is the last mission's end (its clock running on) and a row for the next
+        mission's start (from its data, at 0) follows it: ``N + 1`` rows and one more a junction."""
         X = np.asarray(X)
         dt = X[:-1, -1] * self.frac
-        starts = np.zeros(self.N + 1, bool)
-        starts[0] = True
-        starts[list(self.junctions)] = True
-        mission = np.cumsum(starts) - 1
-        t = np.zeros(self.N + 1)
-        for k in range(1, self.N + 1):
-            t[k] = 0.0 if starts[k] and k < self.N else t[k - 1] + dt[k - 1]
         leg = np.concatenate([self.stage_leg, self.stage_leg[-1:]])
-        out = {'t': t, 'mission': mission, 'leg': leg, 'design': self.design(X[0])}
-        out |= {st.name: X[:, i] * self.ref[i] for i, st in enumerate(self.model.states)}
-        out |= {c.name: X[:, self.ns + j] for j, c in enumerate(self.model.controls)}
+        states = X[:, : self.ns] * self.ref
+        controls = X[:, self.ns : self.ns + self.nc]
+        rows: list[tuple[float, int, int, np.ndarray, np.ndarray, int]] = []  # (t, mission, leg, states, controls, stage)
+        t, mission = 0.0, 0
+        for k in range(self.N + 1):
+            if k in self.junctions and k < self.N:  # (the last mission's end, then the next one's start)
+                rows.append((t, mission, int(leg[k - 1]), states[k], controls[k], k))
+                s0, u0 = self.junctions[k]
+                t, mission = 0.0, mission + 1
+                rows.append((t, mission, int(leg[k]), np.asarray(s0, float), np.asarray(u0, float), k))
+            else:
+                rows.append((t, mission, int(leg[k]), states[k], controls[k], k))
+            t += float(dt[k]) if k < self.N else 0.0
+        S, C = np.array([r[3] for r in rows]), np.array([r[4] for r in rows])
+        out = {'t': np.array([r[0] for r in rows]), 'mission': np.array([r[1] for r in rows]), 'leg': np.array([r[2] for r in rows])}
+        out |= {'stage': np.array([r[5] for r in rows]), 'design': self.design(X[0])}
+        out |= {st.name: S[:, i] for i, st in enumerate(self.model.states)}
+        out |= {c.name: C[:, j] for j, c in enumerate(self.model.controls)}
         return out
 
     # -------------------------------------------------------------------------------------------------- the stages
