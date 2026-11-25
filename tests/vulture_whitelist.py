@@ -16,6 +16,8 @@ stages.Stages.path_seed
 stages.Stages.trajectory  # (the vehicles export solutions with it)
 nested.Nested  # (the vehicles' co-design drivers)
 nested.trust_region
+nested.Nested.check
+nested.Nested.optimise
 stages.chained
 
 # whitelist-audit: off  (record fields and constants a caller reads by attribute)
