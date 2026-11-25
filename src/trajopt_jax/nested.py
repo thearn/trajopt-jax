@@ -102,6 +102,8 @@ class Nested:
             if res.lam0 is None:
                 raise ValueError("a design-dependent start needs the start rows' multipliers (IPMResult.lam0)")
             grad = grad + np.asarray(to_head(-jnp.asarray(res.lam0[:n_head]))[0])
+        if not np.all(np.isfinite(grad)):  # (a NaN gradient sent the outer loop to an all-NaN design: the whoop, 2026-11-25)
+            raise FloatingPointError(f'design gradient not finite at {design} ({res.status} after {res.iterations} iterations): {grad}')
         if res.converged:  # (the next solve starts from this one: warm only from a converged point)
             self.X, self.U, self.state, self.at = res.X, res.U, res.state, design.copy()
             best = self.best
