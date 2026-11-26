@@ -18,6 +18,7 @@ nested.Nested  # (the vehicles' co-design drivers)
 nested.trust_region
 nested.Nested.check
 nested.Nested.optimise
+nested.scenarios
 stages.chained
 
 # whitelist-audit: off  (record fields and constants a caller reads by attribute)
