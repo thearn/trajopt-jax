@@ -195,6 +195,7 @@ def scenarios(
     co-design's processes did; chained into one problem, the whoop's lap in four winds never converged at the stock
     design (800-1500 iterations from the path seed or from each wind's own lap, 2026-11-26)."""
     w = np.full(len(inners), 1.0 / len(inners)) if weights is None else np.asarray(weights, float)
+    _feasible_start(inners, np.asarray(start, float))
 
     def objective(design: np.ndarray) -> tuple[float, np.ndarray]:
         objs, grads = zip(*(inner(design) for inner in inners), strict=True)
@@ -203,6 +204,24 @@ def scenarios(
         return float(w @ np.array(objs)), w @ np.array(grads)
 
     return outer(objective, np.asarray(start, float), lo, hi, feasible, maxiter, inners[0].scale, lambda: sum(len(i.log) for i in inners))
+
+
+SOLVED = ('converged', 'acceptable')  # (the IPM's statuses a scenario's start solve must reach)
+
+
+def _feasible_start(inners: list[Nested], start: np.ndarray) -> None:
+    """Every scenario solved at the start design before the outer loop, stopping on any that does not converge: a
+    scenario the start design cannot fly gives the outer loop no gradient to follow (the stock whoop in a 6 m/s
+    headwind, which the lap co-design flies: three runs went nowhere from stock, 2026-11-26). Start from a design that
+    flies every scenario, or reach the hard one by continuation in its own parameter first (docs/SOLVING.md)."""
+    failed = []
+    for i, inner in enumerate(inners):
+        inner(start)
+        status = inner.log[-1]['status']
+        if status not in SOLVED:
+            failed.append(f'scenario {i}: {status} after {inner.log[-1]["iterations"]} iterations')
+    if failed:
+        raise ValueError('scenarios do not all solve at the start design (' + '; '.join(failed) + '): start from a design that flies them all')
 
 
 def outer(

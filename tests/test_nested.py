@@ -153,3 +153,17 @@ def test_scenarios_as_separate_problems_agree_with_the_chained_missions() -> Non
     mean = scenarios(inners, np.array([2.0]), np.array([0.5]), np.array([2.0]), maxiter=5)
     t = np.array([math.sqrt(2 * D / 2.0), math.sqrt(2 * (D - 5.0) / 2.0)]) / 10.0
     assert mean['objective'] == pytest.approx(t.mean(), rel=3e-3)
+
+
+def test_scenarios_stop_when_one_cannot_be_flown_at_the_start_design() -> None:
+    from trajopt_jax.nested import scenarios
+
+    def single(d: float, max_s: float) -> Nested:
+        prob = Stages(DataScaledIntegrator(), np.array([0.0, 0.0, 0.0]), np.array([1.0]), (Leg((Point(d, None, None, tol=1e-3),), max_s=max_s),),
+                      segments=20)  # fmt: skip
+        X, U = prob.path_seed(3.0)
+        return Nested(prob, X, U, lambda p: p, max_iter=100)
+
+    inners = [single(D, 30.0), single(D, 1.0)]  # (10 m in 1 s needs p = 20: not at p = 1)
+    with pytest.raises(ValueError, match='scenario 1'):
+        scenarios(inners, np.array([1.0]), np.array([0.5]), np.array([2.0]), maxiter=5)
