@@ -90,3 +90,48 @@ def test_optimise_runs_to_the_bound_a_falling_objective_meets() -> None:
     X, U = prob.path_seed(3.0)
     out = Nested(prob, X, U, lambda p: p, max_iter=300).optimise(np.array([1.0]), np.array([0.5]), np.array([2.0]), maxiter=20)
     assert out['design'][0] == pytest.approx(2.0) and out['objective'] == pytest.approx(math.sqrt(2 * D / 2.0) / 10.0, rel=2e-3)
+
+
+def _two_missions() -> Stages:
+    """Two missions chained on the data-scaled integrator: 10 m from rest, then 5 m from rest (from x = 5)."""
+    from trajopt_jax.stages import Mission, chained
+
+    leg = Leg((Point(D, None, None, tol=1e-3),), max_s=30.0)
+    first = Mission(np.array([0.0, 0.0, 0.0]), np.array([1.0]), (leg,))
+    second = Mission(np.array([5.0, 0.0, 0.0]), np.array([1.0]), (leg,))
+    return chained(DataScaledIntegrator(), [first, second], segments=20)
+
+
+def test_each_missions_objective_and_gradient_match_the_closed_form() -> None:
+    prob = _two_missions()
+    X, U = prob.path_seed(3.0)
+    inner = Nested(prob, X, U, lambda p: p, max_iter=300, missions=True)
+    p = 2.0
+    objs, grads = inner.parts(np.array([p]))
+    t = np.array([math.sqrt(2 * D / p), math.sqrt(2 * (D - 5.0) / p)]) / 10.0
+    np.testing.assert_allclose(objs, t, rtol=3e-3)
+    np.testing.assert_allclose(grads[:, 0], -t / (2 * p), rtol=3e-3)  # (d/dp sqrt(2 d / p) = -T / (2 p))
+    obj, grad = inner(np.array([p]))
+    assert objs.sum() == pytest.approx(obj, rel=1e-9) and grads.sum(0) == pytest.approx(grad, rel=1e-6)
+
+
+def test_cvar_is_the_mean_of_the_worst_share() -> None:
+    from trajopt_jax.nested import cvar
+
+    objs, grads = np.array([1.0, 4.0, 2.0, 3.0]), np.eye(4)
+    assert cvar(objs, grads, 1.0)[0] == pytest.approx(2.5)  # (the mean)
+    v, g = cvar(objs, grads, 0.25)  # (the worst)
+    assert v == pytest.approx(4.0) and g == pytest.approx([0, 1, 0, 0])
+    v, g = cvar(objs, grads, 0.375)  # (the worst and half the next: (4 + 0.5 x 3) / 1.5)
+    assert v == pytest.approx(5.5 / 1.5) and g == pytest.approx([0, 1 / 1.5, 0, 0.5 / 1.5])
+    with pytest.raises(ValueError):
+        cvar(objs, grads, 0.0)
+
+
+def test_optimise_on_the_worst_mission_runs_it_to_the_bound() -> None:
+    prob = _two_missions()
+    X, U = prob.path_seed(3.0)
+    inner = Nested(prob, X, U, lambda p: p, max_iter=300, missions=True)
+    out = inner.optimise(np.array([1.0]), np.array([0.5]), np.array([2.0]), maxiter=20, risk=0.5)
+    assert out['design'][0] == pytest.approx(2.0, rel=1e-6)  # (both times fall as p grows: the bound)
+    assert out['objective'] == pytest.approx(math.sqrt(2 * D / 2.0) / 10.0, rel=3e-3)  # (the 10 m mission's, the worse)
