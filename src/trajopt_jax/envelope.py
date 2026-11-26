@@ -32,11 +32,16 @@ def with_data(
     return masks, ends
 
 
-def data_sensitivity(prob: Stages, X: np.ndarray, U: np.ndarray, state: dict, chunk: int = 128, columns: slice | None = None) -> np.ndarray:
+def data_sensitivity(
+    prob: Stages, X: np.ndarray, U: np.ndarray, state: dict, chunk: int = 128, columns: slice | None = None, part: tuple[int, int] | None = None
+) -> np.ndarray:
     """d(obj*)/d(data) for the model data in ``columns`` (all of it by default), the same at every stage (``with_data``),
     at the solution ``X, U`` with the solver state ``state`` (IPMResult.state: the multipliers ``v``, ``nuh`` and the stage
     data ``masks``, ``ends``); data outside ``columns`` (a stage's own: the whoop's wind on one course) is held. The
-    stages in blocks of ``chunk``."""
+    stages in blocks of ``chunk``. ``part=(a, b)``: one mission of a chained problem only (``mission_parts``), its
+    defects on stages a to b - 1 and its inequalities on rows a (the first mission's) or a + 1 to b, so the derivative of
+    that mission's weighted objective: the missions share only the design and the cost they carry, so each one's
+    multipliers are its own problem's."""
     cols = columns or slice(0, prob.model.data_width)
     nd, N = cols.stop - cols.start, prob.N
     if not nd:
@@ -45,6 +50,11 @@ def data_sensitivity(prob: Stages, X: np.ndarray, U: np.ndarray, state: dict, ch
     im, dc = prob._im + 1 + cols.start, prob._dcol + cols.start
     Uz = np.concatenate([U, np.zeros((1, U.shape[1]))])
     v, nuh = np.asarray(state['v']), np.asarray(state['nuh'])
+    if part is not None:  # (the other missions' multipliers zeroed: their terms drop out of the sums below)
+        a, b = part
+        rows, stages = np.arange(len(v)), np.arange(len(nuh))
+        v = np.where(((rows >= (a if a == 0 else a + 1)) & (rows <= b))[:, None], v, 0.0)
+        nuh = np.where(((stages >= a) & (stages < b))[:, None], nuh, 0.0) if nuh.size else nuh
     masks, ends = np.asarray(state['masks']), np.asarray(state['ends'])
     row = jnp.asarray(ends[0, dc : dc + nd])
 
@@ -64,3 +74,17 @@ def data_sensitivity(prob: Stages, X: np.ndarray, U: np.ndarray, state: dict, ch
             b = min(N, a + chunk)
             total = total + grad_h(row, jnp.asarray(X[a:b]), jnp.asarray(U[a:b]), jnp.asarray(masks[a:b]), jnp.asarray(nuh[a:b]))
     return np.asarray(total)
+
+
+def mission_parts(prob: Stages) -> list[tuple[int, int]]:
+    """Each mission's stages ``(a, b)`` in a chained problem (``stages.chained``): from its first stage to the row that
+    holds its end, the next mission's junction (the last row for the last mission)."""
+    cuts = [0, *sorted(prob.junctions), prob.N]
+    return list(zip(cuts[:-1], cuts[1:], strict=True))
+
+
+def mission_objectives(prob: Stages, X: np.ndarray) -> np.ndarray:
+    """Each mission's weighted objective in a chained problem: the cost it adds between its first row and its end row
+    (the cost is carried across a junction), on the objective's scale (``Stages.evaluate``'s obj)."""
+    cost = np.asarray(X)[:, prob.ci] * prob.ref[prob.ci] / 10.0
+    return np.array([cost[b] - cost[a] for a, b in mission_parts(prob)])

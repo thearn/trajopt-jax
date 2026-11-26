@@ -17,6 +17,9 @@ did not on both; each step cites the experiment that set it. A new vehicle start
    at most `MAX_STEP` of each variable's size (`scale`), the gradient the optimum's sensitivity to the data (envelope
    theorem), the outer loop `trust_region` on the design over its size. The whoop: course 1.5775 and lap 3.7440 against
    all-at-once 1.5766 and 3.7438 (runq 6041, 6042).
+   Several missions or scenarios (a chained problem): their weighted sum by default; `missions=True` with
+   `optimise(risk=beta)` their conditional value at risk (`cvar`, the mean of the worst `beta` share), each mission's
+   objective and gradient from its own stages' multipliers (`envelope.mission_parts`), the outer loop on the bounds alone.
 4. **All-at-once co-design** (`codesign=True`) only as a cross-check on small problems. On the wing it stalled at two
    designs a fixed one beat and took 5.5 GB a 128-stage block with the design's map in every node (wing E39-E41).
 

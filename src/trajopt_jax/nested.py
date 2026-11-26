@@ -5,8 +5,9 @@ sensitivity to that data (trajopt_jax.envelope) chained through the data's own m
 ``Nested(prob, X, U, stage_data)`` solves at a design and returns (objective, gradient); each solve starts from the
 last converged one, its multipliers kept and its slacks on the central path at ``warm_mu``, and a design far from it is
 reached in steps of at most ``max_step`` (relative), each warm. ``trust_region`` is the outer loop: a box-constrained
-trust-region BFGS for a few design variables; ``Nested.optimise`` runs it on the design over its size and
-``Nested.check`` compares the gradient with re-solves either side.
+trust-region BFGS for a few design variables; ``Nested.optimise`` runs it on the design over its size (on the
+missions' weighted sum, or with ``risk`` their conditional value at risk, ``cvar``) and ``Nested.check`` compares the
+gradient with re-solves either side.
 
 Why (the wing, 2026-11-23/24): all-at-once co-design (the design as constant states) stalled at two designs both beaten
 by a fixed one, and with the design's map inside every node it took 5.5 GB a 128-stage block; restarted at mu 0.1 a
@@ -25,7 +26,7 @@ import numpy as np
 
 from trajopt_jax import ipm
 from trajopt_jax._jax import jax, jnp
-from trajopt_jax.envelope import data_sensitivity, with_data
+from trajopt_jax.envelope import data_sensitivity, mission_objectives, mission_parts, with_data
 from trajopt_jax.stages import Stages
 
 WARM_MU = 1e-5
@@ -42,7 +43,8 @@ class Nested:
     start rows' multipliers. ``report(prob, res) -> dict`` adds fields to each solve's log line. ``scale``: each design
     variable's typical size, the continuation's steps at most MAX_STEP of it (default the last converged value's size, 1
     where that is 0: the whoop's stock prop pitch, whose first 1e-7 step went in 2400 steps). Each design's (objective,
-    gradient) cached: optimisers ask for the function and the gradient at one point separately."""
+    gradient) cached: optimisers ask for the function and the gradient at one point separately. ``missions``: each
+    mission's own objective and gradient kept too (a chained problem: ``Nested.parts``, what ``optimise(risk=...)`` needs)."""
 
     def __init__(
         self,
@@ -58,6 +60,7 @@ class Nested:
         scale: np.ndarray | None = None,
         max_iter: int = 500,
         verbose: bool = False,
+        missions: bool = False,
     ) -> None:
         self.prob, self.X, self.U = prob, X, U
         self.stage_data, self.start, self.base, self.columns = stage_data, start, base, columns
@@ -68,6 +71,8 @@ class Nested:
         self.at: np.ndarray | None = None  # (the design of the last converged solve, which the next one starts from)
         self.best: tuple[float, np.ndarray, np.ndarray, np.ndarray] | None = None  # (objective, design, X, U)
         self.log: list[dict] = []
+        self.missions = mission_parts(prob) if missions else None
+        self.per_mission: dict[tuple, tuple[np.ndarray, np.ndarray]] = {}
 
     def __call__(self, design: np.ndarray) -> tuple[float, np.ndarray]:
         design = np.asarray(design, float)
@@ -119,7 +124,21 @@ class Nested:
         out = (float(res.obj), grad)
         if not step:
             self.cache[tuple(np.round(design, 9))] = out
+            if self.missions is not None:
+                grads = [to_design(jnp.asarray(data_sensitivity(prob, res.X, res.U, res.state, columns=self.columns, part=part)))[0]
+                         for part in self.missions]  # fmt: skip
+                self.per_mission[tuple(np.round(design, 9))] = (mission_objectives(prob, res.X), np.asarray(grads))
         return out
+
+    def parts(self, design: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Each mission's weighted objective and its gradient at ``design`` (``missions=True``; the design's start, as
+        ``start``'s share, is not split by mission)."""
+        if self.missions is None:
+            raise ValueError('Nested.parts needs missions=True')
+        if self.start is not None:
+            raise ValueError('Nested.parts: a design-dependent start is not split by mission')
+        self(design)
+        return self.per_mission[tuple(np.round(np.asarray(design, float), 9))]
 
     def check(self, design: np.ndarray, step: np.ndarray) -> dict:
         """The gradient at ``design`` against re-solves at ``design +- step`` from the same converged state (a check,
@@ -138,30 +157,61 @@ class Nested:
         return dict(design=design.tolist(), objective=obj, grad=grad.tolist(), envelope=envelope, resolves=float(resolves))
 
     def optimise(
-        self, start: np.ndarray, lo: np.ndarray, hi: np.ndarray, feasible: Callable[[np.ndarray], bool] | None = None, maxiter: int = 30
+        self,
+        start: np.ndarray,
+        lo: np.ndarray,
+        hi: np.ndarray,
+        feasible: Callable[[np.ndarray], bool] | None = None,
+        maxiter: int = 30,
+        risk: float | None = None,
     ) -> dict:
         """Co-design from ``start`` within ``lo``-``hi``: ``trust_region`` on the design over its size (``scale``, else
         the start's, 1 where 0) and the objective over its magnitude at the start, ``feasible(design)`` holding each step;
-        the result's design solved last (its solution ``best`` when it is the best)."""
+        the result's design solved last (its solution ``best`` when it is the best). ``risk=beta`` (``missions=True``):
+        the missions' CVaR at ``beta`` (``cvar``) in place of their weighted sum."""
         start = np.asarray(start, float)
         size = self.scale if self.scale is not None else np.where(np.abs(start) > 1e-9, np.abs(start), 1.0)
-        obj0 = max(abs(self(start)[0]), 1e-12)  # (a magnitude: a range objective is negative, the distance flown)
+
+        def objective(design: np.ndarray) -> tuple[float, np.ndarray]:
+            if risk is None:
+                return self(design)
+            objs, grads = self.parts(design)
+            return cvar(objs, grads, risk)
+
+        obj0 = max(abs(objective(start)[0]), 1e-12)  # (a magnitude: a range objective is negative, the distance flown)
 
         def fg(z: np.ndarray) -> tuple[float, np.ndarray]:
-            obj, grad = self(z * size)
+            obj, grad = objective(z * size)
             return obj / obj0, grad * size / obj0
 
         ok = None if feasible is None else (lambda z: feasible(z * size))
         t = time.time()
         out = trust_region(fg, start / size, np.asarray(lo, float) / size, np.asarray(hi, float) / size, ok, maxiter)
         design = out['z'] * size
-        obj, _ = self(design)
+        obj, _ = objective(design)
         print(
             f'outer: {out["message"]} ({out["iterations"]} iterations, {len(self.log)} solves, {time.time() - t:.0f} s) objective {obj:.6f}',
             flush=True,
         )
         return dict(design=design.tolist(), objective=obj, message=out['message'], iterations=out['iterations'], solves=len(self.log),
                     seconds=round(time.time() - t, 1))  # fmt: skip
+
+
+def cvar(objs: np.ndarray, grads: np.ndarray, beta: float) -> tuple[float, np.ndarray]:
+    """The conditional value at risk of the missions' objectives at ``beta`` (the mean of the worst ``beta`` share, a
+    fraction of a mission counted in part; 1 is the mean, 1 / N the worst) and its gradient (theirs, so weighted). The
+    objectives are taken as given: weight the missions alike (one common scale) for scenarios of one course.
+    Rockafellar and Uryasev's form, minimised here directly: it is the value whatever the level, the epigraph's
+    variable eliminated, so the outer loop stays on the design's bounds alone."""
+    if not 0.0 < beta <= 1.0:
+        raise ValueError(f'cvar: beta {beta} outside (0, 1]')
+    objs, grads = np.asarray(objs, float), np.asarray(grads, float)
+    k = beta * len(objs)
+    w = np.clip(k - np.arange(len(objs)), 0.0, 1.0)  # (the worst first: whole missions, then a part of the next)
+    order = np.argsort(-objs)
+    weights = np.zeros(len(objs))
+    weights[order] = w / k
+    return float(weights @ objs), weights @ grads
 
 
 def trust_region(
