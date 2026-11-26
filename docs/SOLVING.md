@@ -20,6 +20,8 @@ did not on both; each step cites the experiment that set it. A new vehicle start
    Several missions or scenarios (a chained problem): their weighted sum by default; `missions=True` with
    `optimise(risk=beta)` their conditional value at risk (`cvar`, the mean of the worst `beta` share), each mission's
    objective and gradient from its own stages' multipliers (`envelope.mission_parts`), the outer loop on the bounds alone.
+   Scenarios that do not converge chained (the whoop's lap in four winds, 800-1500 iterations) go as separate problems
+   sharing the design: `nested.scenarios`, one `Nested` each, each warm from its own last solution.
 4. **All-at-once co-design** (`codesign=True`) only as a cross-check on small problems. On the wing it stalled at two
    designs a fixed one beat and took 5.5 GB a 128-stage block with the design's map in every node (wing E39-E41).
 

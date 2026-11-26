@@ -135,3 +135,21 @@ def test_optimise_on_the_worst_mission_runs_it_to_the_bound() -> None:
     out = inner.optimise(np.array([1.0]), np.array([0.5]), np.array([2.0]), maxiter=20, risk=0.5)
     assert out['design'][0] == pytest.approx(2.0, rel=1e-6)  # (both times fall as p grows: the bound)
     assert out['objective'] == pytest.approx(math.sqrt(2 * D / 2.0) / 10.0, rel=3e-3)  # (the 10 m mission's, the worse)
+
+
+def test_scenarios_as_separate_problems_agree_with_the_chained_missions() -> None:
+    from trajopt_jax.nested import scenarios
+
+    def single(d: float) -> Nested:
+        prob = Stages(DataScaledIntegrator(), np.array([0.0, 0.0, 0.0]), np.array([1.0]), (Leg((Point(d, None, None, tol=1e-3),), max_s=30.0),),
+                      segments=20)  # fmt: skip
+        X, U = prob.path_seed(3.0)
+        return Nested(prob, X, U, lambda p: p, max_iter=300)
+
+    inners = [single(D), single(D - 5.0)]
+    worst = scenarios(inners, np.array([1.0]), np.array([0.5]), np.array([2.0]), maxiter=20, risk=0.5)
+    assert worst['design'][0] == pytest.approx(2.0, rel=1e-6)
+    assert worst['objective'] == pytest.approx(math.sqrt(2 * D / 2.0) / 10.0, rel=3e-3)  # (the 10 m scenario's)
+    mean = scenarios(inners, np.array([2.0]), np.array([0.5]), np.array([2.0]), maxiter=5)
+    t = np.array([math.sqrt(2 * D / 2.0), math.sqrt(2 * (D - 5.0) / 2.0)]) / 10.0
+    assert mean['objective'] == pytest.approx(t.mean(), rel=3e-3)

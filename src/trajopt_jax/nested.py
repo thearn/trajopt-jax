@@ -6,8 +6,8 @@ sensitivity to that data (trajopt_jax.envelope) chained through the data's own m
 last converged one, its multipliers kept and its slacks on the central path at ``warm_mu``, and a design far from it is
 reached in steps of at most ``max_step`` (relative), each warm. ``trust_region`` is the outer loop: a box-constrained
 trust-region BFGS for a few design variables; ``Nested.optimise`` runs it on the design over its size (on the
-missions' weighted sum, or with ``risk`` their conditional value at risk, ``cvar``) and ``Nested.check`` compares the
-gradient with re-solves either side.
+missions' weighted sum, or with ``risk`` their conditional value at risk, ``cvar``), ``scenarios`` over several
+problems sharing the design, and ``Nested.check`` compares the gradient with re-solves either side.
 
 Why (the wing, 2026-11-23/24): all-at-once co-design (the design as constant states) stalled at two designs both beaten
 by a fixed one, and with the design's map inside every node it took 5.5 GB a 128-stage block; restarted at mu 0.1 a
@@ -169,8 +169,6 @@ class Nested:
         the start's, 1 where 0) and the objective over its magnitude at the start, ``feasible(design)`` holding each step;
         the result's design solved last (its solution ``best`` when it is the best). ``risk=beta`` (``missions=True``):
         the missions' CVaR at ``beta`` (``cvar``) in place of their weighted sum."""
-        start = np.asarray(start, float)
-        size = self.scale if self.scale is not None else np.where(np.abs(start) > 1e-9, np.abs(start), 1.0)
 
         def objective(design: np.ndarray) -> tuple[float, np.ndarray]:
             if risk is None:
@@ -178,23 +176,62 @@ class Nested:
             objs, grads = self.parts(design)
             return cvar(objs, grads, risk)
 
-        obj0 = max(abs(objective(start)[0]), 1e-12)  # (a magnitude: a range objective is negative, the distance flown)
+        return outer(objective, np.asarray(start, float), lo, hi, feasible, maxiter, self.scale, lambda: len(self.log))
 
-        def fg(z: np.ndarray) -> tuple[float, np.ndarray]:
-            obj, grad = objective(z * size)
-            return obj / obj0, grad * size / obj0
 
-        ok = None if feasible is None else (lambda z: feasible(z * size))
-        t = time.time()
-        out = trust_region(fg, start / size, np.asarray(lo, float) / size, np.asarray(hi, float) / size, ok, maxiter)
-        design = out['z'] * size
-        obj, _ = objective(design)
-        print(
-            f'outer: {out["message"]} ({out["iterations"]} iterations, {len(self.log)} solves, {time.time() - t:.0f} s) objective {obj:.6f}',
-            flush=True,
-        )
-        return dict(design=design.tolist(), objective=obj, message=out['message'], iterations=out['iterations'], solves=len(self.log),
-                    seconds=round(time.time() - t, 1))  # fmt: skip
+def scenarios(
+    inners: list[Nested],
+    start: np.ndarray,
+    lo: np.ndarray,
+    hi: np.ndarray,
+    feasible: Callable[[np.ndarray], bool] | None = None,
+    maxiter: int = 30,
+    risk: float | None = None,
+    weights: np.ndarray | None = None,
+) -> dict:
+    """Co-design over scenarios that are each their own problem (``inners``: one ``Nested`` each, sharing the design):
+    their weighted sum (``weights``, alike by default), or with ``risk`` their CVaR (``cvar``, unweighted: scenarios of
+    one course compare by their objectives). Each scenario solves warm from its own last solution, as the old bilevel
+    co-design's processes did; chained into one problem, the whoop's lap in four winds never converged at the stock
+    design (800-1500 iterations from the path seed or from each wind's own lap, 2026-11-26)."""
+    w = np.full(len(inners), 1.0 / len(inners)) if weights is None else np.asarray(weights, float)
+
+    def objective(design: np.ndarray) -> tuple[float, np.ndarray]:
+        objs, grads = zip(*(inner(design) for inner in inners), strict=True)
+        if risk is not None:
+            return cvar(np.array(objs), np.array(grads), risk)
+        return float(w @ np.array(objs)), w @ np.array(grads)
+
+    return outer(objective, np.asarray(start, float), lo, hi, feasible, maxiter, inners[0].scale, lambda: sum(len(i.log) for i in inners))
+
+
+def outer(
+    objective: Callable[[np.ndarray], tuple[float, np.ndarray]],
+    start: np.ndarray,
+    lo: np.ndarray,
+    hi: np.ndarray,
+    feasible: Callable[[np.ndarray], bool] | None,
+    maxiter: int,
+    scale: np.ndarray | None,
+    solves: Callable[[], int],
+) -> dict:
+    """``trust_region`` on the design over its size (``scale``, else the start's, 1 where 0) and the objective over its
+    magnitude at the start, ``feasible(design)`` holding each step; the result's design evaluated last."""
+    size = scale if scale is not None else np.where(np.abs(start) > 1e-9, np.abs(start), 1.0)
+    obj0 = max(abs(objective(start)[0]), 1e-12)  # (a magnitude: a range objective is negative, the distance flown)
+
+    def fg(z: np.ndarray) -> tuple[float, np.ndarray]:
+        obj, grad = objective(z * size)
+        return obj / obj0, grad * size / obj0
+
+    ok = None if feasible is None else (lambda z: feasible(z * size))
+    t = time.time()
+    out = trust_region(fg, start / size, np.asarray(lo, float) / size, np.asarray(hi, float) / size, ok, maxiter)
+    design = out['z'] * size
+    obj, _ = objective(design)
+    print(f'outer: {out["message"]} ({out["iterations"]} iterations, {solves()} solves, {time.time() - t:.0f} s) objective {obj:.6f}', flush=True)
+    return dict(design=design.tolist(), objective=obj, message=out['message'], iterations=out['iterations'], solves=solves(),
+                seconds=round(time.time() - t, 1))  # fmt: skip
 
 
 def cvar(objs: np.ndarray, grads: np.ndarray, beta: float) -> tuple[float, np.ndarray]:
