@@ -21,7 +21,11 @@ did not on both; each step cites the experiment that set it. A new vehicle start
    `optimise(risk=beta)` their conditional value at risk (`cvar`, the mean of the worst `beta` share), each mission's
    objective and gradient from its own stages' multipliers (`envelope.mission_parts`), the outer loop on the bounds alone.
    Scenarios that do not converge chained (the whoop's lap in four winds, 800-1500 iterations) go as separate problems
-   sharing the design: `nested.scenarios`, one `Nested` each, each warm from its own last solution.
+   sharing the design: `nested.scenarios`, one `Nested` each, each warm from its own last solution. **Start from a
+   design that flies every scenario**: `scenarios` solves each at the start design first and stops on any that does
+   not converge. The stock whoop cannot fly the lap into a 6 m/s headwind (stalled at feasibility 0.25 even from the
+   4 m/s solve), the lap co-design flies all four winds at once (whoop runq 7710-7723): three co-designs from stock
+   went nowhere. Reach a hard scenario by continuation in its own parameter (the wind in steps) at that design.
 4. **All-at-once co-design** (`codesign=True`) only as a cross-check on small problems. On the wing it stalled at two
    designs a fixed one beat and took 5.5 GB a 128-stage block with the design's map in every node (wing E39-E41).
 
