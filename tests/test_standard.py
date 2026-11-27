@@ -170,3 +170,21 @@ def test_a_chained_trajectory_ends_one_mission_and_starts_the_next_at_its_own_st
     assert tr['mission'][k] == 0 and tr['t'][k] > 0.0 and x[k] == pytest.approx(float(X[k, 0] * prob.ref[0]))  # (the first's end)
     assert tr['mission'][k + 1] == 1 and tr['t'][k + 1] == 0.0 and x[k + 1] == pytest.approx(5.0)  # (the second's own start)
     assert np.all(np.diff(tr['t'][: k + 1]) > 0) and np.all(np.diff(tr['t'][k + 1 :]) > 0)
+
+
+def test_seed_from_a_flown_trajectory() -> None:
+    """Stages.seed from the exact optimum (full acceleration from rest: x = t^2 / 2): its states and controls land at
+    the nodes and the solve starts there, converging at once."""
+    d = 10.0
+    T = math.sqrt(2 * d)
+    start, u0, legs = np.array([0.0, 0.0, 0.0]), np.array([1.0]), (Leg((Point(d, None, None, tol=1e-3),), max_s=30.0),)
+    prob = Stages(DoubleIntegrator(), start, u0, legs, segments=30)
+
+    def state_at(_: int, w: float) -> np.ndarray:
+        t = w * T
+        return np.array([t * t / 2, t, t])
+
+    X, U = prob.seed([T], state_at, lambda _, w: np.array([1.0]))
+    assert np.allclose(X[:, 3], 1.0) and X[-1, 0] * prob.ref[0] == pytest.approx(d)  # (the controls, the end's position)
+    res = ipm.solve(prob, X, U, prob.x0(X[0, -1]), max_iter=50, verbose=False)
+    assert res.iterations <= 15 and float(res.X[0, -1]) == pytest.approx(T, rel=2e-3)
