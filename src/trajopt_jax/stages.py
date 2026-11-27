@@ -343,7 +343,7 @@ class Stages:
         """(X, U) along each leg's seed path (``Leg.seed_path``: straight at its end event, or circling its hold) at
         constant ``speed``, the controls held at the start's: the model's ``state_from`` maps each point's position and
         velocity to a state, the model's ``angles`` unwrapped so turns do not jump by 2 pi."""
-        ns, nc, ref, L0 = self.ns, self.nc, self.ref, self.leg_start
+        nc, ref, L0 = self.nc, self.ref, self.leg_start
         a, paths, mission_start = np.asarray(self.start[:3], float), [], np.asarray(self.start, float)
         for i, leg in enumerate(self.legs):
             if L0[i] in self.junctions:  # (a chained mission: its seed starts at its own start)
@@ -353,13 +353,10 @@ class Stages:
             paths.append((tau, at))
             a = b
         taus = [tau for tau, _ in paths]
-        c = np.concatenate([[0.0], np.asarray(self._c)])
-        X, U = np.zeros((self.N + 1, self.nx)), np.zeros((self.N, self.nu))
         integ = [self.si[n] for n in getattr(self.model, 'seed_integrated', ('cost',))]
         ang = [self.si[n] for n in getattr(self.model, 'angles', ())]
         rate = jax.jit(lambda s: self._node(s, jnp.asarray(self.start_u), jnp.zeros(nc), jnp.zeros(self.model.data_width))[0])
-        t0, prev, t_prev = 0.0, None, 0.0
-        lev0 = self.x0(0.0)[self._il]
+        prev, t_prev = None, 0.0
 
         def state(p: int, w: float) -> np.ndarray:
             """The seed's state at fraction ``w`` of leg ``p``: the path's kinematics, the integrated states advanced
@@ -370,7 +367,7 @@ class Stages:
                 prev = np.asarray(self.junctions[L0[p]][0], float).copy()
                 prev[self.ci] = cost
             pos, vel = paths[p][1](w)
-            t = t0 + w * taus[p]
+            t = float(sum(taus[:p])) + w * taus[p]
             st = self.model.state_from(pos, vel, np.array(self.start, float) if prev is None else prev)
             if prev is not None:
                 st[ang] -= 2 * math.pi * np.round((st[ang] - prev[ang]) / (2 * math.pi))  # (only the angles: positions jump)
@@ -384,20 +381,33 @@ class Stages:
             prev, t_prev = st, t
             return st / ref
 
+        return self.seed(taus, lambda p, w: state(p, w) * ref)
+
+    def seed(
+        self, taus: list[float], state_at: Callable[[int, float], np.ndarray], control_at: Callable[[int, float], np.ndarray] | None = None
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """(X, U) from any trajectory: ``taus`` each leg's duration, ``state_at(leg, w)`` the state (unscaled) at
+        fraction ``w`` of that leg, ``control_at(leg, w)`` the controls (None: the start's), called in time order. A
+        simulated flight of the model makes a seed its dynamics agree with (a constant-speed path from a hover start
+        put the speed at the pinned start and the solve never left feasibility 20, the rocket quad, 2026-11-27)."""
+        ns, nc, ref, L0 = self.ns, self.nc, self.ref, self.leg_start
+        c = np.concatenate([[0.0], np.asarray(self._c)])
+        X, U = np.zeros((self.N + 1, self.nx)), np.zeros((self.N, self.nu))
+        lev0 = self.x0(0.0)[self._il]
         for k in range(self.N):
             p = int(self.stage_leg[k])
             j, S = k - L0[p], self.leg_S[p]
             w0, fk = float(self.frac[L0[p] : k].sum()), float(self.frac[k])
-            Y = [state(p, w0 + ck * fk) for ck in c]
+            Y = [np.asarray(state_at(p, w0 + ck * fk), float) / ref for ck in c]
+            u = np.asarray(control_at(p, w0), float) if control_at is not None else np.asarray(self.start_u, float)
             last = j == S - 1
             nxt = taus[min(p + 1, len(taus) - 1)]
             # (at a junction the stage's state is the last mission's end, its start reset from the data)
             y0 = U[k - 1][nc + 1 + 2 * ns :] if k in self.junctions else Y[0]
-            X[k] = np.concatenate([y0, self.start_u, lev0, [taus[p]]])
-            U[k] = np.concatenate([self.start_u, [nxt - taus[p] if last else 0.0], *Y[1:]])
-            if last:
-                t0 += taus[p]
-        X[self.N] = np.concatenate([U[-1][nc + 1 + 2 * ns :], self.start_u, lev0, [taus[-1]]])
+            X[k] = np.concatenate([y0, u, lev0, [taus[p]]])
+            U[k] = np.concatenate([u, [nxt - taus[p] if last else 0.0], *Y[1:]])
+        u_end = np.asarray(control_at(len(taus) - 1, 1.0), float) if control_at is not None else np.asarray(self.start_u, float)
+        X[self.N] = np.concatenate([U[-1][nc + 1 + 2 * ns :], u_end, lev0, [taus[-1]]])
         X[0, :ns] = np.asarray(self.start) / ref
         return X, U
 
